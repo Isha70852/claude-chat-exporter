@@ -123,11 +123,11 @@ If Claude's interface changes, update the `SELECTORS` object:
 ```javascript
 const SELECTORS = {
   userMessage: '[data-testid="user-message"]',
-  messageGroup: ".group",
+  messageGroup: '.group',
   copyButton: 'button[data-testid="action-bar-copy"]',
-  editTextarea: "textarea",
-  conversationTitle:
-    '[data-testid="chat-menu-trigger"] .truncate, button[data-testid="chat-menu-trigger"] div.truncate',
+  editButton: 'button[aria-label="Edit"]',
+  editTextarea: 'textarea',
+  conversationTitle: '[data-testid="chat-title-button"] .truncate, button[data-testid="chat-title-button"] div.truncate'
 };
 ```
 

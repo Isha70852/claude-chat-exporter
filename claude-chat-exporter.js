@@ -9,8 +9,9 @@ function setupClaudeExporter() {
     userMessage: '[data-testid="user-message"]',
     messageGroup: '.group',
     copyButton: 'button[data-testid="action-bar-copy"]',
+    editButton: 'button[aria-label="Edit"]',
     editTextarea: 'textarea',
-    conversationTitle: '[data-testid="chat-menu-trigger"] .truncate, button[data-testid="chat-menu-trigger"] div.truncate'
+    conversationTitle: '[data-testid="chat-title-button"] .truncate, button[data-testid="chat-title-button"] div.truncate'
   };
 
   const DELAYS = {
@@ -52,15 +53,6 @@ function setupClaudeExporter() {
       .substring(0, 100);             // Limit length
   }
 
-  function findEditButton(messageGroup) {
-    const allButtons = messageGroup.querySelectorAll('button');
-    editButton = Array.from(allButtons).find(btn =>
-      btn.textContent.trim().toLowerCase() === 'edit'
-    );
-
-    return editButton;
-  }
-
   async function extractMessageContent(messageContainer, messageIndex) {
     try {
       // Trigger hover to reveal edit button
@@ -68,7 +60,7 @@ function setupClaudeExporter() {
       await delay(DELAYS.hover);
 
       const messageGroup = messageContainer.closest(SELECTORS.messageGroup);
-      const editButton = findEditButton(messageGroup);
+      const editButton = messageGroup.querySelector(SELECTORS.editButton);
 
       if (editButton) {
         console.log(`📝 Extracting message ${messageIndex + 1} via edit`);
@@ -90,10 +82,10 @@ function setupClaudeExporter() {
         if (content) return content;
       }
 
-      console.warn(`Failed to extract message ${messageIndex + 1}:`, `Edit button not found`);
+      throw new Error(`Edit button not found`);
 
     } catch (error) {
-      console.warn(`Failed to extract message ${messageIndex + 1}:`, error);
+      console.error(`Failed to extract message ${messageIndex + 1}:`, error);
     } finally {
       // Clean up hover state
       messageContainer.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
@@ -101,17 +93,20 @@ function setupClaudeExporter() {
   }
 
   async function extractAllHumanMessages() {
-    console.log('🔄 Extracting human messages...');
     const userMessages = document.querySelectorAll(SELECTORS.userMessage);
+
+    console.log(`🔄 Extracting ${userMessages.length} human messages...`);
 
     for (let i = 0; i < userMessages.length; i++) {
       const content = await extractMessageContent(userMessages[i], i);
-      humanMessages.push({
-        type: 'user',
-        content: content,
-        index: i
-      });
-      updateStatus();
+      if (content) {
+        humanMessages.push({
+          type: 'user',
+          content: content,
+          index: i
+        });
+        updateStatus();
+      }
     }
 
     console.log(`✅ Extracted ${humanMessages.length} human messages`);
@@ -224,6 +219,8 @@ function setupClaudeExporter() {
       statusDiv.textContent = `Error: ${error.message}`;
       statusDiv.style.background = '#f44336';
       console.error('Export failed:', error);
+    } finally {
+      setTimeout(cleanup, 3000);
     }
   }
 
@@ -244,7 +241,6 @@ function setupClaudeExporter() {
     statusDiv.style.background = '#4CAF50';
 
     console.log('🎉 Export complete!');
-    setTimeout(cleanup, 3000);
   }
 
   function cleanup() {
