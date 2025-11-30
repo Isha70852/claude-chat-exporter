@@ -1,3 +1,4 @@
+// Claude Chat Exporter (with long-prompt card support, fixed Claude capture)
 function setupClaudeExporter() {
   const originalWriteText = navigator.clipboard.writeText;
   const capturedResponses = [];
@@ -11,13 +12,23 @@ function setupClaudeExporter() {
     copyButton: 'button[data-testid="action-bar-copy"]',
     editButton: 'button[aria-label="Edit"]',
     editTextarea: 'textarea',
-    conversationTitle: '[data-testid="chat-title-button"] .truncate, button[data-testid="chat-title-button"] div.truncate'
+    conversationTitle:
+      '[data-testid="chat-title-button"] .truncate, button[data-testid="chat-title-button"] div.truncate',
+
+    // Long prompt card related
+    // Collapsed card button (above the textarea, class prefix used because actual classes are long)
+    longPromptButton:
+      'button.rounded-lg.text-left.block.cursor-pointer.font-ui',
+
+    // Expanded full prompt container <div> (full class name; remember to escape 0.5)
+    longPromptContainer:
+      'div.-m-1.mt-0.min-h-0.flex-1.whitespace-pre-wrap.break-all.text-xs.p-4.bg-bg-000.rounded-lg.border-0\\.5.border-border-300.overflow-y-auto.font-mono.shadow-sm'
   };
 
   const DELAYS = {
-    hover: 50,    // Time to wait for hover effects
-    edit: 150,    // Time for edit interface to load
-    copy: 100     // Time between copy operations
+    hover: 50, // Time to wait for hover effects
+    edit: 150, // Time for edit interface to load
+    copy: 100  // Time between copy operations
   };
 
   function downloadMarkdown(content, filename) {
@@ -32,7 +43,7 @@ function setupClaudeExporter() {
   }
 
   function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function getConversationTitle() {
@@ -45,56 +56,145 @@ function setupClaudeExporter() {
 
     // Sanitize filename: remove/replace invalid characters
     return title
-      .replace(/[<>:"/\\|?*]/g, '_')  // Replace invalid filename chars
-      .replace(/\s+/g, '_')           // Replace spaces with underscores
-      .replace(/_{2,}/g, '_')         // Replace multiple underscores with single
-      .replace(/^_+|_+$/g, '')        // Trim leading/trailing underscores
+      .replace(/[<>:"/\\|?*]/g, '_') // Replace invalid filename characters
+      .replace(/\s+/g, '_') // Replace spaces with underscores
+      .replace(/_{2,}/g, '_') // Replace multiple underscores with single underscore
+      .replace(/^_+|_+$/g, '') // Trim leading/trailing underscores
       .toLowerCase()
-      .substring(0, 100);             // Limit length
+      .substring(0, 100); // Limit to 100 characters
+  }
+
+  // Find the "long prompt collapsed card button" corresponding to a textarea
+  function findLongPromptButtonForTextarea(textarea) {
+    if (!textarea) return null;
+
+    // 1) Search previous siblings and their descendants
+    let node = textarea;
+    while (node) {
+      let sibling = node.previousElementSibling;
+      while (sibling) {
+        if (sibling.matches && sibling.matches(SELECTORS.longPromptButton)) {
+          return sibling;
+        }
+        const btnInSibling =
+          sibling.querySelector &&
+          sibling.querySelector(SELECTORS.longPromptButton);
+        if (btnInSibling) return btnInSibling;
+
+        sibling = sibling.previousElementSibling;
+      }
+      node = node.parentElement;
+    }
+
+    // 2) Search parent chain for <div class="gap-2 mx-0.5 mb-3 flex flex-wrap">
+    let container = textarea.parentElement;
+    while (container) {
+      if (
+        container.matches &&
+        container.matches('div.gap-2.mx-0\\.5.mb-3.flex.flex-wrap')
+      ) {
+        const btn = container.querySelector(SELECTORS.longPromptButton);
+        if (btn) return btn;
+      }
+      container = container.parentElement;
+    }
+
+    return null;
+  }
+
+  // Expand long prompt card and obtain full content
+  async function extractLongPromptFromCard(editTextarea) {
+    try {
+      const button = findLongPromptButtonForTextarea(editTextarea);
+      if (!button) return '';
+
+      // Click the button to expand the full prompt
+      button.click();
+      await delay(DELAYS.edit);
+
+      // Prefer finding inside the same local container; fallback to document
+      const localRoot =
+        button.closest('div, section, article, form') || document;
+      const fullDiv =
+        localRoot.querySelector(SELECTORS.longPromptContainer) ||
+        document.querySelector(SELECTORS.longPromptContainer);
+
+      if (!fullDiv) return '';
+
+      const text = (fullDiv.textContent || '').trim();
+      return text;
+    } catch (e) {
+      console.warn('Failed to extract long prompt card:', e);
+      return '';
+    }
   }
 
   async function extractMessageContent(messageContainer, messageIndex) {
     try {
       // Trigger hover to reveal edit button
-      messageContainer.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      messageContainer.dispatchEvent(
+        new MouseEvent('mouseenter', { bubbles: true })
+      );
       await delay(DELAYS.hover);
 
       const messageGroup = messageContainer.closest(SELECTORS.messageGroup);
-      const editButton = messageGroup.querySelector(SELECTORS.editButton);
+      const editButton = messageGroup?.querySelector(SELECTORS.editButton);
 
-      if (editButton) {
-        console.log(`📝 Extracting message ${messageIndex + 1} via edit`);
-        editButton.click();
-        await delay(DELAYS.edit);
-
-        // Get content from edit interface
-        const editTextarea = document.querySelector(SELECTORS.editTextarea);
-
-        let content = '';
-        if (editTextarea) {
-          content = editTextarea.value;
-        }
-
-        // Close edit mode
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-        await delay(DELAYS.hover);
-
-        if (content) return content;
+      if (!editButton) {
+        console.warn(
+          `No edit button for message ${messageIndex + 1}, skipping.`
+        );
+        return '';
       }
 
-      throw new Error(`Edit button not found`);
+      console.log(`📝 Extracting message ${messageIndex + 1} via edit`);
+      editButton.click();
+      await delay(DELAYS.edit);
 
+      // Extract textarea content
+      const editTextarea = document.querySelector(SELECTORS.editTextarea);
+      let content = '';
+
+      if (editTextarea) {
+        const textareaContent = editTextarea.value || '';
+
+        // 1. Find long-prompt button above textarea
+        // 2. Click to expand
+        // 3. Extract full prompt from expanded <div>
+        // 4. Combine long prompt + textarea content
+        const longPrompt = await extractLongPromptFromCard(editTextarea);
+
+        if (longPrompt) {
+          content = `${longPrompt}\n\n${textareaContent}`.trim();
+        } else {
+          content = textareaContent;
+        }
+      }
+
+      // Exit edit mode
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape' })
+      );
+      await delay(DELAYS.hover);
+
+      if (content) return content;
+      return '';
     } catch (error) {
-      console.error(`Failed to extract message ${messageIndex + 1}:`, error);
+      console.error(
+        `Failed to extract message ${messageIndex + 1}:`,
+        error
+      );
+      return '';
     } finally {
-      // Clean up hover state
-      messageContainer.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+      // Cleanup hover state
+      messageContainer.dispatchEvent(
+        new MouseEvent('mouseleave', { bubbles: true })
+      );
     }
   }
 
   async function extractAllHumanMessages() {
     const userMessages = document.querySelectorAll(SELECTORS.userMessage);
-
     console.log(`🔄 Extracting ${userMessages.length} human messages...`);
 
     for (let i = 0; i < userMessages.length; i++) {
@@ -102,7 +202,7 @@ function setupClaudeExporter() {
       if (content) {
         humanMessages.push({
           type: 'user',
-          content: content,
+          content,
           index: i
         });
         updateStatus();
@@ -113,9 +213,11 @@ function setupClaudeExporter() {
   }
 
   // Intercept clipboard writes for Claude responses
-  navigator.clipboard.writeText = function(text) {
+  navigator.clipboard.writeText = function (text) {
     if (interceptorActive && text && text.length > 20) {
-      console.log(`📋 Captured Claude response ${capturedResponses.length + 1}`);
+      console.log(
+        `📋 Captured Claude response ${capturedResponses.length + 1}`
+      );
       capturedResponses.push({
         type: 'claude',
         content: text,
@@ -123,16 +225,28 @@ function setupClaudeExporter() {
       });
       updateStatus();
     }
+
+    // Intercept only — do NOT write to clipboard (ensures Claude copy works correctly)
+    // To also write to clipboard, replace with:
+    // return originalWriteText.call(navigator.clipboard, text);
   };
 
   // Create status indicator
   const statusDiv = document.createElement('div');
-  statusDiv.style.cssText = `
-    position: fixed; top: 10px; right: 10px; z-index: 10000;
-    background: #2196F3; color: white; padding: 10px 15px;
-    border-radius: 5px; font-family: monospace; font-size: 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.3); max-width: 300px;
-  `;
+  statusDiv.style.cssText = [
+    'position: fixed',
+    'top: 10px',
+    'right: 10px',
+    'z-index: 10000',
+    'background: #2196F3',
+    'color: white',
+    'padding: 10px 15px',
+    'border-radius: 5px',
+    'font-family: monospace',
+    'font-size: 12px',
+    'box-shadow: 0 2px 10px rgba(0,0,0,0.3)',
+    'max-width: 300px'
+  ].join(';');
   document.body.appendChild(statusDiv);
 
   function updateStatus() {
@@ -141,19 +255,18 @@ function setupClaudeExporter() {
 
   async function triggerClaudeResponseCopy() {
     const copyButtons = document.querySelectorAll(SELECTORS.copyButton);
-
     if (copyButtons.length === 0) {
       throw new Error('No Claude copy buttons found!');
     }
 
     console.log(`🚀 Clicking ${copyButtons.length} Claude copy buttons...`);
 
-    // Click all copy buttons with minimal delays
+    // Click each copy button with minimal delay
     for (let i = 0; i < copyButtons.length; i++) {
       const button = copyButtons[i];
       try {
         if (button.offsetParent !== null) {
-          button.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+          button.scrollIntoView({ behavior: 'auto', block: 'nearest' });
           button.click();
           console.log(`🖱️ Clicked copy button ${i + 1}/${copyButtons.length}`);
         }
@@ -161,7 +274,6 @@ function setupClaudeExporter() {
         console.warn(`Failed to click button ${i + 1}:`, error);
       }
 
-      // Only delay between clicks, not after the last one
       if (i < copyButtons.length - 1) {
         await delay(DELAYS.copy);
       }
@@ -169,8 +281,12 @@ function setupClaudeExporter() {
   }
 
   function buildMarkdown() {
-    let markdown = "# Conversation with Claude\n\n";
-    const maxLength = Math.max(humanMessages.length, capturedResponses.length);
+    let markdown = '# Conversation with Claude\n\n';
+
+    const maxLength = Math.max(
+      humanMessages.length,
+      capturedResponses.length
+    );
 
     for (let i = 0; i < maxLength; i++) {
       if (i < humanMessages.length && humanMessages[i].content) {
@@ -185,20 +301,24 @@ function setupClaudeExporter() {
   }
 
   async function waitForClipboardOperations(expectedCount) {
-    const maxWaitTime = 2000; // Maximum wait time
+    const maxWaitTime = 2000; // Max wait duration
     const checkInterval = 100; // Check every 100ms
     let elapsed = 0;
 
     while (elapsed < maxWaitTime) {
       if (capturedResponses.length >= expectedCount) {
-        console.log(`✅ All ${expectedCount} responses captured in ${elapsed}ms`);
+        console.log(
+          `✅ All ${expectedCount} responses captured in ${elapsed}ms`
+        );
         return;
       }
       await delay(checkInterval);
       elapsed += checkInterval;
     }
 
-    console.warn(`⚠️ Timeout: Only captured ${capturedResponses.length}/${expectedCount} responses`);
+    console.warn(
+      `⚠️ Timeout: Only captured ${capturedResponses.length}/${expectedCount} responses`
+    );
   }
 
   async function startExport() {
@@ -209,12 +329,10 @@ function setupClaudeExporter() {
       statusDiv.textContent = 'Copying Claude responses...';
       await triggerClaudeResponseCopy();
 
-      // Smart wait - only as long as needed
       const copyButtons = document.querySelectorAll(SELECTORS.copyButton);
       await waitForClipboardOperations(copyButtons.length);
 
       completeExport();
-
     } catch (error) {
       statusDiv.textContent = `Error: ${error.message}`;
       statusDiv.style.background = '#f44336';
@@ -235,11 +353,10 @@ function setupClaudeExporter() {
 
     const markdown = buildMarkdown();
     const filename = `${getConversationTitle()}.md`;
-    downloadMarkdown(markdown, filename);
 
+    downloadMarkdown(markdown, filename);
     statusDiv.textContent = `✅ Downloaded: ${filename}`;
     statusDiv.style.background = '#4CAF50';
-
     console.log('🎉 Export complete!');
   }
 
